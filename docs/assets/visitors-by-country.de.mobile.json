@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "city": "munich",
+  "locale": "de",
+  "layout": "stacked",
+  "presentation": "world_map_and_rank",
+  "path": "docs/assets/visitors-by-country.de.mobile.svg",
+  "sha256": "1c924316c3668d95ac90467ab3edcc3ad895b620162a57e20fd7f2906d750c43",
+  "source_kind": "not_connected",
+  "collection_status": "not_connected",
+  "metric": null,
+  "source": null,
+  "generated_at_utc": null
+}
