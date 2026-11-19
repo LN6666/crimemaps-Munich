@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import {fileURLToPath} from 'node:url';
 import {build} from 'esbuild';
+import ts from 'typescript';
 
 const source = fileURLToPath(new URL('../src/',import.meta.url));
 
@@ -42,8 +44,49 @@ function newScope(fixture){
   return {scope,reads};
 }
 
+const rendererPath=new URL('../src/painted/city/safety/building-mesh-renderer.ts',import.meta.url);
+const renderer=ts.createSourceFile(fileURLToPath(rendererPath),readFileSync(rendererPath,'utf8'),ts.ScriptTarget.Latest,true);
+function rendererDefinition(name){
+  const matches=[];
+  function visit(node){
+    if(ts.isFunctionDeclaration(node)&&node.name?.text===name)matches.push(node);
+    ts.forEachChild(node,visit);
+  }
+  visit(renderer);
+  assert.equal(matches.length,1,name);
+  return matches[0].getText(renderer);
+}
+
+const {checkShadowAdmission,SOURCE_SHADOW_VECTOR}=await bundle(`
+  import {getC312_FIXTURE} from './painted/city/safety/c312-fixture';
+  import {getC320_FIXTURE} from './painted/city/safety/c320-fixture';
+  import {getC322_FIXTURE} from './painted/city/safety/c322-fixture';
+  import {C319_FIXTURE} from './painted/city/safety/c319-fixture';
+  import {C323_FIXTURE} from './painted/city/safety/c323-fixture';
+  import {cityCohortIdentity} from './painted/city/safety/city-data-metadata';
+  import {SOURCE_SHADOW_VECTOR} from './painted/city/safety/source-shadow';
+  export {SOURCE_SHADOW_VECTOR};
+  export function checkShadowAdmission(value,context,count,scope){
+    const city=context.city,currentDataScope=()=>scope,key=row=>row.objectId+'|'+row.partId;
+    let c319ShadowProofReady=false,c320ShadowProofReady=false,c322ShadowProofReady=false,c323ShadowProofReady=false;
+    ${rendererDefinition('c311ShadowAdmissionReady')}
+    ${rendererDefinition('c312ShadowAdmissionReady')}
+    return c312ShadowAdmissionReady(value,context,count);
+  }
+`);
+
+function shadow(rows,boundarySHA){
+  return {
+    verifiedBoundarySHA256:boundarySHA,
+    profile:{city:'munich',schema_version:1,source_boundary_sha256:boundarySHA,status:'display-schematic',
+      includes_growth_zero_to_one:true,swept_bbox_actual_city_covered:true,fixed_vector:SOURCE_SHADOW_VECTOR},
+    components:rows.map(row=>({objectId:row.objectId,partId:row.partId,
+      triangleCount:row.batches.reduce((total,batch)=>total+batch.indices.length/3,0)})),
+  };
+}
+
 const ordinary={city:'munich',objectId:'ordinary-building',partId:'ordinary-part',
-  batches:[{positions:[0,0,0,1,0,0,0,1,0]}]};
+  batches:[{positions:[0,0,0,1,0,0,0,1,0],indices:[0,1,2]}]};
 const makeContext=(signal,fixture={})=>({
   city:'munich',signal,indexSHA:fixture.indexSHA,sourcePBF:fixture.sourcePBF,
   boundarySHA:fixture.boundarySHA,sourceSnapshot:fixture.sourceSnapshot,
@@ -57,6 +100,8 @@ test('the ordinary Munich viewport commits with a cold C312 scope',async()=>{
   try{
     await prepareCityData([ordinary],'munich',signal,scope);
     assert(!reads.includes(C312_FIXTURE_RESOURCE.file));
+    const boundarySHA='a'.repeat(64);
+    assert.equal(checkShadowAdmission(shadow([ordinary],boundarySHA),makeContext(signal,{boundarySHA}),1,scope),false);
     const result=c312Commit([ordinary],makeContext(signal),()=>assert.fail('Unrelated batch was tested'),scope);
     assert.equal(result.ready,false);
     assert.equal(result.sourceOnly,true);
@@ -75,9 +120,16 @@ test('the admitted C312 cohort still checks the actual fixture and included batc
     const identity=({city,objectId,partId})=>({city,objectId,partId});
     assert.deepEqual(fixture.native.map(identity),CITY_DATA_COHORTS.c312.native);
     assert.deepEqual(fixture.added.map(identity),CITY_DATA_COHORTS.c312.added);
+    const context=makeContext(signal,fixture);
+    const shadowProof=shadow(fixture.native,fixture.boundarySHA);
+    assert.throws(()=>checkShadowAdmission(shadowProof,context,fixture.native.length,scope),
+      /Frozen data resource was not prepared for this scope: painted\/city\/safety\/c312-fixture\.ts#0/);
     await prepareCityData(fixture.native,'munich',signal,scope);
     assert.equal(reads.filter(file=>file===C312_FIXTURE_RESOURCE.file).length,1);
-    const context=makeContext(signal,fixture);
+    assert.equal(checkShadowAdmission(shadowProof,context,fixture.native.length,scope),true);
+    const wrongTriangles=structuredClone(shadowProof);
+    wrongTriangles.components[0].triangleCount++;
+    assert.equal(checkShadowAdmission(wrongTriangles,context,fixture.native.length,scope),false);
     const rows=[...fixture.native,...fixture.added,ordinary];
     const result=c312Commit(rows,context,row=>row!==ordinary,scope);
     assert.equal(result.ready,true);
